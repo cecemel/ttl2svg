@@ -61,6 +61,7 @@ ex:alice a ex:Person ;
     ex:name "Alice" ;
     ex:age "42"^^xsd:int ;
     ex:label "Alice"@en ;
+    ex:note "This is a long literal that must survive in the tooltip" ;
     ex:knows ex:bob ;
     ex:employer ex:acme ;
     ex:worksFor ex:acme ;
@@ -101,16 +102,20 @@ fi
 
 uml="$out/uml.svg"
 fail() { echo "FAIL: $*" >&2; exit 1; }
+grep -q 'prefixes:' "$out/spec-stress.svg" || fail "missing prefix legend in default SVG"
+grep -q 'http://www.w3.org/2001/XMLSchema#' "$out/spec-stress.svg" || fail "missing xsd namespace in default legend"
 [ "$(grep -c '<g id="node' "$uml" || true)" -eq 5 ] || fail "expected 5 boxes"
 [ "$(grep -c '<g id="edge' "$uml" || true)" -eq 8 ] || fail "expected 8 edges"
 grep -q 'alice : Person' "$uml" || fail "missing alice box header"
 grep -q '42^^xsd:int' "$uml" || fail "missing typed literal"
 grep -q 'Alice@en' "$uml" || fail "missing language tag"
 grep -q 'xsd:date' "$uml" || fail "missing date literal"
-grep -q 'employer, worksFor' "$uml" || fail "parallel edges not merged"
-grep -q 'memberOf, partOf' "$uml" || fail "parallel edges not merged"
+grep -q 'ex:employer, ex:worksFor' "$uml" || fail "parallel edges not merged"
+grep -q 'ex:memberOf, ex:partOf' "$uml" || fail "parallel edges not merged"
 grep -q 'ex:ghent' "$uml" || fail "object-only target should be an attribute row"
 grep -q '>self<' "$uml" || fail "self reference should be an attribute row"
+grep -q 'prefixes:' "$uml" || fail "missing prefix legend"
+grep -q 'http://example.org/vocab#' "$uml" || fail "missing ex namespace in legend"
 if grep -q 'rdf:type' "$uml"; then fail "rdf:type should not be shown"; fi
 if "${runner[@]}" /tmp/ttl2svg-uml.ttl -o "$out/uml-invalid.svg" --uml --no-literals >/dev/null 2>&1; then
   fail "--uml accepted --no-literals"
@@ -118,6 +123,29 @@ fi
 if "${runner[@]}" /tmp/ttl2svg-uml.ttl -o "$out/uml-invalid.svg" --uml --subjects-only >/dev/null 2>&1; then
   fail "--uml accepted --subjects-only"
 fi
+if "${runner[@]}" /tmp/ttl2svg-uml.ttl --interactive --subjects-only >/dev/null 2>&1; then
+  fail "--interactive accepted --subjects-only"
+fi
+
+interactive="$out/interactive.svg"
+"${runner[@]}" /tmp/ttl2svg-uml.ttl -o "$interactive" --uml --interactive --max-label-length 20
+grep -q 'This is a long li...' "$interactive" || fail "interactive label should stay truncated"
+grep -q 'This is a long literal that must survive in the tooltip' "$interactive" || fail "full literal missing from tooltip"
+grep -q 'http://example.org/vocab#note' "$interactive" || fail "full predicate missing from tooltip"
+grep -q 'ttl2svg-copy' "$interactive" || fail "copy script missing"
+grep -q 'foreignObject' "$interactive" || fail "copy helper missing"
+grep -Eq 'id="a_edge[0-9]+&#45;label"' "$interactive" || fail "edge label has no copy anchor"
+grep -q 'http://example.org/vocab#employer&#10;http://example.org/vocab#worksFor' "$interactive" || fail "merged edge label tooltip missing"
+grep -q 'prefixes:' "$interactive" || fail "missing prefix legend in interactive UML"
+if grep -q 'ttl2svg-copy' "$uml"; then fail "non-interactive SVG has the copy script"; fi
+
+interactive_default="$out/interactive-default.svg"
+"${runner[@]}" /tmp/ttl2svg-uml.ttl -o "$interactive_default" --interactive --max-label-length 20
+grep -q 'This is a long literal that must survive in the tooltip' "$interactive_default" || fail "full literal missing from default tooltip"
+grep -q 'http://example.org/vocab#note' "$interactive_default" || fail "full predicate missing from default tooltip"
+grep -q 'ttl2svg-copy' "$interactive_default" || fail "default copy script missing"
+grep -Eq 'id="a_edge[0-9]+&#45;label"' "$interactive_default" || fail "default edge label has no copy anchor"
+grep -q 'prefixes:' "$interactive_default" || fail "missing prefix legend in interactive default"
 
 batch="$out/.tmp-batch"
 trap 'rm -rf "$batch"' EXIT
@@ -126,10 +154,11 @@ mkdir -p "$batch/in"
 cp /tmp/ttl2svg-uml.ttl "$batch/in/uml.ttl"
 cp /tmp/ttl2svg-ntest.nt "$batch/in/ntriples.nt"
 echo "ignore me" > "$batch/in/notes.txt"
-"${runner[@]}" "$batch/in" -o "$batch/out" --uml
+"${runner[@]}" "$batch/in" -o "$batch/out" --uml --interactive
 [ -f "$batch/out/uml.svg" ] || fail "batch did not render uml.ttl"
 [ -f "$batch/out/ntriples.svg" ] || fail "batch did not render ntriples.nt"
 [ ! -f "$batch/out/notes.svg" ] || fail "batch converted a non-RDF file"
+grep -q 'ttl2svg-copy' "$batch/out/uml.svg" || fail "batch did not inject the copy script"
 mkdir -p "$batch/single"
 "${runner[@]}" /tmp/ttl2svg-ntest.nt -o "$batch/single"
 [ -f "$batch/single/ttl2svg-ntest.svg" ] || fail "single file did not render into output dir"
@@ -139,4 +168,5 @@ echo "  $out/spec-stress.svg      check: 25 triples, collection/blank-node chain
 echo "  $out/literal-types.svg    check: every '100' label carries a different type tag"
 echo "  $out/ntriples.svg         check: 3 nodes + 2 edges, bnode drawn once"
 echo "  $out/uml.svg              check: 5 boxes, 8 edges, typed values inside, merged labels"
+echo "  $out/interactive.svg      check: full value in tooltip, truncated label, copy script"
 echo "  batch run                 check: both RDF files converted, notes.txt ignored, single file into output dir"

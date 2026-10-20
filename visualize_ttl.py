@@ -67,6 +67,15 @@ def uri_label(manager, uri):
     return squeeze(tail)
 
 
+def prefixed_label(manager, term):
+    """Return prefix:local for a URI, keeping the prefix even for long names."""
+    try:
+        prefix, _, local = manager.compute_qname(URIRef(str(term)), generate=False)
+        return squeeze(f"{prefix}:{local}")
+    except Exception:
+        return uri_label(manager, str(term))
+
+
 def local_name(manager, term):
     """Return the local part of a URI, or the short id of a blank node."""
     if isinstance(term, BNode):
@@ -104,6 +113,51 @@ def literal_label(value, max_length, manager):
     return text + tag
 
 
+def literal_tooltip(value):
+    text = str(value)
+    if value.language:
+        return f'"{text}"@{value.language}'
+    if value.datatype and str(value.datatype) not in (
+        "http://www.w3.org/2001/XMLSchema#string",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+    ):
+        return f'"{text}"^^<{value.datatype}>'
+    return text
+
+
+def term_tooltip(term):
+    if isinstance(term, Literal):
+        return literal_tooltip(term)
+    if isinstance(term, BNode):
+        return "_:" + str(term)
+    return str(term)
+
+
+def prefix_legend(dot, manager):
+    bindings = dict(manager.namespaces())
+    used = set()
+    for match in re.finditer(r"(?<![\w])([A-Za-z][A-Za-z0-9_.-]*):", dot.source):
+        prefix = match.group(1)
+        if prefix in bindings:
+            used.add(prefix)
+    return [(prefix, bindings[prefix]) for prefix in sorted(used)]
+
+
+def graph_label(title, prefixes):
+    def escape(text):
+        return html.escape(text, quote=False)
+
+    rows = [f'<TR><TD COLSPAN="2" ALIGN="LEFT"><B>{escape(title)}</B></TD></TR>']
+    if prefixes:
+        rows.append('<TR><TD COLSPAN="2" ALIGN="LEFT">prefixes:</TD></TR>')
+        for prefix, namespace in prefixes:
+            rows.append(f'<TR><TD ALIGN="LEFT">{escape(prefix)}</TD>'
+                        f'<TD ALIGN="LEFT">= {escape(namespace)}</TD></TR>')
+    table = ('<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="1">'
+             + "".join(rows) + "</TABLE>")
+    return "<" + table + ">"
+
+
 def parse_ttl(ttl_path):
     graph = Graph()
     graph.parse(ttl_path, format="turtle")
@@ -116,7 +170,7 @@ SUBJECT_FILL = "#d5e8f8"
 LITERAL_FILL = "#f5f5f5"
 
 
-def build_graph(ttl_path, engine, show_literals, max_length):
+def build_graph(ttl_path, engine, show_literals, max_length, interactive=False):
     graph = parse_ttl(ttl_path)
     manager = graph.namespace_manager
 
@@ -128,8 +182,6 @@ def build_graph(ttl_path, engine, show_literals, max_length):
 
     dot = graphviz.Digraph(name=Path(ttl_path).stem, format="svg", engine=engine)
     dot.attr(rankdir="LR", ranksep="1", nodesep="0.4", bgcolor="white")
-    dot.attr("graph", label=f"{Path(ttl_path).name}: {len(graph)} triples"
-                             f" | blue nodes are the subjects")
     dot.attr("graph", labelloc="t")
     dot.attr("node", fontsize="11")
     dot.attr("edge", fontsize="9", color="#555555")
@@ -144,22 +196,24 @@ def build_graph(ttl_path, engine, show_literals, max_length):
 
     def draw_node(term):
         if isinstance(term, rdflib.Literal):
-            label = literal_label(term, max_length, manager)
-            dot.node(node_ids[term], shape="box", style="filled",
-                     fillcolor=LITERAL_FILL, label=label)
-            return
-        if isinstance(term, rdflib.BNode):
-            label = squeeze(str(term))
+            attrs = dict(shape="box", style="filled", fillcolor=LITERAL_FILL,
+                         label=literal_label(term, max_length, manager))
         else:
-            label = uri_label(manager, str(term))
-        if term in subjects:
-            node_types = types_of(term)
-            if node_types:
-                label += "\n" + ", ".join(node_types)
-            dot.node(node_ids[term], shape="ellipse", style="filled",
-                     fillcolor=SUBJECT_FILL, label=label)
-        else:
-            dot.node(node_ids[term], shape="ellipse", label=label)
+            if isinstance(term, rdflib.BNode):
+                label = squeeze(str(term))
+            else:
+                label = uri_label(manager, str(term))
+            if term in subjects:
+                node_types = types_of(term)
+                if node_types:
+                    label += "\n" + ", ".join(node_types)
+                attrs = dict(shape="ellipse", style="filled",
+                             fillcolor=SUBJECT_FILL, label=label)
+            else:
+                attrs = dict(shape="ellipse", label=label)
+        if interactive:
+            attrs["tooltip"] = term_tooltip(term)
+        dot.node(node_ids[term], **attrs)
 
     for subject, predicate, obj in graph:
         if predicate == RDF.type:
@@ -169,32 +223,46 @@ def build_graph(ttl_path, engine, show_literals, max_length):
             continue
         node_id(subject)
         node_id(obj)
-        dot.edge(node_ids[subject], node_ids[obj],
-                 label=uri_label(manager, str(predicate)))
+        attrs = dict(label=uri_label(manager, str(predicate)))
+        if interactive:
+            attrs["tooltip"] = str(predicate)
+            attrs["labeltooltip"] = str(predicate)
+        dot.edge(node_ids[subject], node_ids[obj], **attrs)
 
+    title = f"{Path(ttl_path).name}: {len(graph)} triples | blue nodes are the subjects"
+    dot.attr("graph", label=graph_label(title, prefix_legend(dot, manager)))
     return dot
 
 
-def uml_label(header, rows):
+def uml_label(header, header_tooltip, rows, interactive):
     def escape(text):
         return html.escape(text, quote=False)
+
+    def attrs(tooltip):
+        if not interactive:
+            return ""
+        tooltip = html.escape(tooltip, quote=True).replace("\n", "&#10;")
+        return f' HREF="#copy" TOOLTIP="{tooltip}"'
 
     parts = [
         '<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">',
         f'<TR><TD COLSPAN="2" BGCOLOR="{SUBJECT_FILL}" ALIGN="CENTER" '
-        f'SIDES="B" BORDER="1"><B>{escape(header)}</B></TD></TR>',
+        f'SIDES="B" BORDER="1"{attrs(header_tooltip)}>'
+        f'<B>{escape(header)}</B></TD></TR>',
     ]
     if rows:
-        for prop, value in rows:
+        for prop, value, prop_tooltip, value_tooltip in rows:
             parts.append(
-                f'<TR><TD ALIGN="LEFT" BALIGN="LEFT">{escape(prop)}</TD>'
-                f'<TD ALIGN="LEFT" BALIGN="LEFT">{escape(value)}</TD></TR>'
+                f'<TR><TD ALIGN="LEFT" BALIGN="LEFT"{attrs(prop_tooltip)}>'
+                f'{escape(prop)}</TD>'
+                f'<TD ALIGN="LEFT" BALIGN="LEFT"{attrs(value_tooltip)}>'
+                f'{escape(value)}</TD></TR>'
             )
     parts.append("</TABLE>")
     return "<" + "".join(parts) + ">"
 
 
-def build_uml_graph(ttl_path, engine, max_length):
+def build_uml_graph(ttl_path, engine, max_length, interactive=False):
     graph = parse_ttl(ttl_path)
     manager = graph.namespace_manager
 
@@ -226,23 +294,26 @@ def build_uml_graph(ttl_path, engine, max_length):
             if literals:
                 text = ", ".join(literal_label(value, max_length, manager)
                                  for value in literals)
-                rows[subject].append((prop, text))
+                full = ", ".join(literal_tooltip(value) for value in literals)
+                rows[subject].append((prop, text, str(predicate), full))
             objects = sorted((value for value in values
                               if not isinstance(value, Literal)), key=str)
             for obj in objects:
                 if obj == subject:
-                    rows[subject].append((prop, local_name(manager, obj)))
+                    rows[subject].append((prop, local_name(manager, obj),
+                                          str(predicate), term_tooltip(obj)))
                 elif obj in box_terms:
-                    edges.setdefault((subject, obj), set()).add(prop)
+                    edges.setdefault((subject, obj), {})[predicate] = \
+                        prefixed_label(manager, predicate)
                 else:
-                    rows[subject].append((prop, uri_label(manager, str(obj))))
+                    rows[subject].append((prop, uri_label(manager, str(obj)),
+                                          str(predicate), str(obj)))
 
     for term in rows:
         rows[term].sort()
 
     dot = graphviz.Digraph(name=Path(ttl_path).stem, format="svg", engine=engine)
     dot.attr(rankdir="LR", ranksep="1", nodesep="0.4", bgcolor="white")
-    dot.attr("graph", label=f"{Path(ttl_path).name}: {len(graph)} triples | UML view")
     dot.attr("graph", labelloc="t")
     dot.attr("node", fontsize="11")
     dot.attr("edge", fontsize="9", color="#555555")
@@ -255,14 +326,144 @@ def build_uml_graph(ttl_path, engine, max_length):
                        for rdf_type in instance_types.get(term, ()))
         if types:
             header += " : " + ", ".join(types)
-        dot.node(node_ids[term], shape="box", style="filled", fillcolor="white",
-                 color="#555555", label=uml_label(header, rows[term]))
+        attrs = dict(shape="box", style="filled", fillcolor="white",
+                     color="#555555",
+                     label=uml_label(header, term_tooltip(term), rows[term],
+                                     interactive))
+        if interactive:
+            attrs["tooltip"] = term_tooltip(term)
+        dot.node(node_ids[term], **attrs)
 
     for subject, obj in sorted(edges, key=lambda pair: (str(pair[0]), str(pair[1]))):
-        label = ", ".join(sorted(edges[(subject, obj)]))
-        dot.edge(node_ids[subject], node_ids[obj], label=label)
+        predicates = edges[(subject, obj)]
+        label = ", ".join(sorted(set(predicates.values())))
+        attrs = dict(label=label)
+        if interactive:
+            tooltip = "\n".join(sorted(str(p) for p in predicates))
+            attrs["tooltip"] = tooltip
+            attrs["labeltooltip"] = tooltip
+        dot.edge(node_ids[subject], node_ids[obj], **attrs)
 
+    title = f"{Path(ttl_path).name}: {len(graph)} triples | UML view"
+    dot.attr("graph", label=graph_label(title, prefix_legend(dot, manager)))
     return dot
+
+
+INTERACTIVE_SNIPPET = '''<foreignObject x="0" y="0" width="1" height="1" style="opacity:0;pointer-events:none">
+<textarea xmlns="http://www.w3.org/1999/xhtml" id="ttl2svg-copy" readonly="readonly"></textarea>
+</foreignObject>
+<script type="text/javascript"><![CDATA[
+(function () {
+  var svg = (document.currentScript && document.currentScript.parentNode) ||
+            document.documentElement;
+  var XLINK = "http://www.w3.org/1999/xlink";
+
+  function anchorTitle(el) {
+    while (el && el !== svg) {
+      if (el.tagName && el.tagName.toLowerCase() === "a") {
+        var title = el.getAttributeNS(XLINK, "title") ||
+                    el.getAttribute("xlink:title");
+        if (title) return title;
+      }
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  function groupAnchorTitle(el) {
+    while (el && el !== svg) {
+      if (el.tagName && el.tagName.toLowerCase() === "g") {
+        var cls = el.getAttribute("class") || "";
+        if (cls === "node" || cls === "edge") {
+          var anchors = el.getElementsByTagName("a");
+          for (var i = 0; i < anchors.length; i++) {
+            var title = anchors[i].getAttributeNS(XLINK, "title") ||
+                        anchors[i].getAttribute("xlink:title");
+            if (title) return title;
+          }
+        }
+      }
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  function groupTitle(el) {
+    while (el && el !== svg) {
+      if (el.tagName && el.tagName.toLowerCase() === "g") {
+        var cls = el.getAttribute("class") || "";
+        if (cls === "node" || cls === "edge") {
+          for (var i = 0; i < el.childNodes.length; i++) {
+            var child = el.childNodes[i];
+            if (child.nodeType === 1 &&
+                child.tagName.toLowerCase() === "title") {
+              return child.textContent;
+            }
+          }
+        }
+      }
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  function fallback(text) {
+    var helper = svg.querySelector("textarea");
+    if (!helper) { window.prompt("Copy:", text); return; }
+    helper.value = text;
+    helper.focus({ preventScroll: true });
+    helper.select();
+    try {
+      if (!document.execCommand("copy")) window.prompt("Copy:", text);
+    } catch (e) {
+      window.prompt("Copy:", text);
+    }
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () { fallback(text); });
+    } else {
+      fallback(text);
+    }
+  }
+
+  svg.addEventListener("click", function (event) {
+    var text = anchorTitle(event.target) ||
+               groupAnchorTitle(event.target) ||
+               groupTitle(event.target);
+    if (!text) return;
+    event.preventDefault();
+    copyText(text);
+    var group = event.target;
+    while (group && group !== svg) {
+      if (group.tagName && group.tagName.toLowerCase() === "g") {
+        var cls = group.getAttribute("class") || "";
+        if (cls === "node" || cls === "edge") break;
+      }
+      group = group.parentNode;
+    }
+    if (group && group !== svg) {
+      var old = group.style.opacity;
+      group.style.opacity = "0.45";
+      setTimeout(function () { group.style.opacity = old; }, 250);
+    }
+  });
+
+  var style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  style.textContent = "g.node, g.edge, a { cursor: copy; }";
+  svg.appendChild(style);
+})();
+]]></script>
+'''
+
+
+def add_interactivity(svg_path):
+    text = svg_path.read_text(encoding="utf-8")
+    if "ttl2svg-copy" in text:
+        return
+    text = text.replace("</svg>", INTERACTIVE_SNIPPET + "</svg>")
+    svg_path.write_text(text, encoding="utf-8")
 
 
 RDF_SUFFIXES = {".ttl", ".nt", ".turtle"}
@@ -284,11 +485,14 @@ def print_subjects(ttl_path):
 
 def render_file(ttl_path, output_path, args):
     if args.uml:
-        dot = build_uml_graph(ttl_path, args.engine, args.max_label_length)
+        dot = build_uml_graph(ttl_path, args.engine, args.max_label_length,
+                              args.interactive)
     else:
         dot = build_graph(ttl_path, args.engine, not args.no_literals,
-                          args.max_label_length)
+                          args.max_label_length, args.interactive)
     rendered = dot.render(outfile=str(output_path))
+    if args.interactive:
+        add_interactivity(Path(rendered))
     print(f"Wrote {rendered}")
 
 
@@ -318,6 +522,8 @@ def main():
         sys.exit("--uml cannot be combined with --no-literals")
     if args.uml and args.subjects_only:
         sys.exit("--uml cannot be combined with --subjects-only")
+    if args.interactive and args.subjects_only:
+        sys.exit("--interactive cannot be combined with --subjects-only")
 
     input_path = Path(args.ttl)
     if not input_path.exists():
@@ -366,6 +572,8 @@ def parse_args():
     parser.add_argument("--uml", action="store_true",
                         help="UML view: instances as boxes with their values, "
                              "edges only between instances")
+    parser.add_argument("--interactive", action="store_true",
+                        help="add full-value hover tooltips and click-to-copy")
     return parser.parse_args()
 
 
