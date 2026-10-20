@@ -30,3 +30,5 @@ Writes spec-stress graphs to `out/` to check visually.
 - `--no-literals` skip literal values
 - `--subjects-only` list subjects with types, no rendering
 - `--max-label-length 40` chars of a literal shown
+
+> Disclaimer: vibecoded by an LLM in one session. Read the script before you trust it.
