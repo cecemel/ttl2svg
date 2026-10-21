@@ -1,10 +1,12 @@
 # ttl2svg
 
-Render an RDF graph as SVG. Blue ellipses are subjects (with `rdf:type` in the label), white ellipses are object-only resources, grey boxes are literals. Edge labels are prefixed predicates; literal labels keep datatype and language tags. Every SVG includes a legend of the prefixes used in the labels. Turtle and N-Triples are accepted.
+Render RDF as SVG. Takes Turtle or N-Triples, one file or a directory.
 
-## Run
+In the default view, subjects are blue ellipses, resources that are only an object are white ellipses, and literals are grey boxes. Edges show the prefixed predicate. Literal labels keep datatype and language. Each graph has a legend with the prefixes used.
 
-Put `.ttl` or `.nt` files in `in/`, then convert all of them:
+## run
+
+Put files in `in/`, then:
 
 ```bash
 docker build -t ttl2svg .
@@ -15,45 +17,21 @@ docker run --rm \
   ttl2svg /data/in -o /data/out
 ```
 
-One SVG per input file lands in `out/`. Pass a single file instead of the directory to convert just that file.
+One SVG per input file. A single file works too. Add flags to the same command.
 
-## UML mode
+## options
 
-`--uml` draws each instance as a box (`name : Class`) with its literal values and datatypes inside. Links between instances become edges labelled with the prefixed predicate; parallel links between the same pair merge into one edge, self links stay inside the box, and literals never become nodes.
+- `-o PATH` output file or directory. Default: next to the input. A directory input writes to a sibling `out/`.
+- `--engine NAME` layout: `dot` (default), `fdp`, `sfdp`, `neato`, `twopi`.
+- `--no-literals` draw only resources.
+- `--max-label-length N` characters of a literal in the label. Default 40.
+- `--subjects-only` print the subjects and their types. No SVG. Single file only.
+- `--uml` UML-like box view: instances as boxes with their values inside, edges only between instances. Not with `--no-literals` or `--subjects-only`.
+- `--interactive` show the full value on hover and copy it on click. Not with `--subjects-only`.
 
-```bash
-docker run --rm \
-  -v "$(pwd)/in:/data/in" \
-  -v "$(pwd)/out:/data/out" \
-  ttl2svg /data/in -o /data/out --uml
-```
+The interactive script runs only when you open the SVG directly in a browser. In an `<img>` tag it does not run. Inkscape and most viewers ignore it. Native tooltips still work there.
 
-`--uml` cannot be combined with `--no-literals` or `--subjects-only`.
-
-## Hover and copy
-
-`--interactive` adds full-value tooltips and click-to-copy. Hover a node or edge to see the full URI, literal or predicate; in UML mode the same works per header, property and value cell. Click to copy that value.
-
-```bash
-docker run --rm \
-  -v "$(pwd)/in:/data/in" \
-  -v "$(pwd)/out:/data/out" \
-  ttl2svg /data/in -o /data/out --interactive
-```
-
-The copy script only runs when the SVG is opened directly in a browser. It is blocked in `<img>` tags and ignored by Inkscape and most other viewers; native tooltips still work there. `--interactive` cannot be combined with `--subjects-only`.
-
-## Options
-
-- `-o` output `.svg` file or directory (default: next to the input; a directory input defaults to a sibling `out/`)
-- `--engine` `dot|fdp|sfdp|neato|twopi`
-- `--no-literals` skip literal values
-- `--subjects-only` list subjects of a single file with types, no rendering
-- `--max-label-length` chars of a literal shown (default 40)
-- `--uml` instance boxes with values inside, edges only between instances
-- `--interactive` full-value hover tooltips and click-to-copy
-
-## Test
+## test
 
 ```bash
 docker run --rm -v "$(pwd):/work" -w /work --entrypoint bash ttl2svg ./test.sh

@@ -344,7 +344,7 @@ def build_uml_graph(ttl_path, engine, max_length, interactive=False):
             attrs["labeltooltip"] = tooltip
         dot.edge(node_ids[subject], node_ids[obj], **attrs)
 
-    title = f"{Path(ttl_path).name}: {len(graph)} triples | UML view"
+    title = f"{Path(ttl_path).name}: {len(graph)} triples | UML-like box view"
     dot.attr("graph", label=graph_label(title, prefix_legend(dot, manager)))
     return dot
 
@@ -570,7 +570,7 @@ def parse_args():
     parser.add_argument("--max-label-length", type=int, default=40,
                         help="max characters of a literal shown (default: 40)")
     parser.add_argument("--uml", action="store_true",
-                        help="UML view: instances as boxes with their values, "
+                        help="UML-like box view: instances as boxes with their values, "
                              "edges only between instances")
     parser.add_argument("--interactive", action="store_true",
                         help="add full-value hover tooltips and click-to-copy")
